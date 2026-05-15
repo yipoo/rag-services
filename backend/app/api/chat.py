@@ -2,11 +2,12 @@ import json
 import time
 
 import structlog
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
 from app.core.deps import Ctx, DBSession
+from app.core.limiter import limiter
 from app.models import ChatMessage, ChatSession
 from app.schemas.chat import ChatRequest, ChatResponse, RetrievedChunk
 from app.services import cache, feedback, llm, rag
@@ -35,7 +36,8 @@ async def _load_history(db, session_id: int, limit: int = 4) -> list[dict]:
 
 
 @router.post("", response_model=ChatResponse)
-async def chat_endpoint(req: ChatRequest, db: DBSession, ctx: Ctx):
+@limiter.limit("60/minute")
+async def chat_endpoint(request: Request, req: ChatRequest, db: DBSession, ctx: Ctx):
     session = await _ensure_session(db, ctx, req.session_id)
     history = await _load_history(db, session.id)
 
@@ -93,7 +95,8 @@ async def chat_endpoint(req: ChatRequest, db: DBSession, ctx: Ctx):
 
 
 @router.post("/stream")
-async def chat_stream_endpoint(req: ChatRequest, db: DBSession, ctx: Ctx):
+@limiter.limit("60/minute")
+async def chat_stream_endpoint(request: Request, req: ChatRequest, db: DBSession, ctx: Ctx):
     """SSE stream:
        event: meta   data: {session_id, retrieval, confidence, source, faq_hit, cache_hit, debug}
        event: delta  data: {text}

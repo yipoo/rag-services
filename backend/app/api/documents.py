@@ -1,13 +1,14 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
 
 from app.core.deps import Ctx, DBSession
+from app.core.limiter import limiter
 from app.models import Chunk, Document
 from app.schemas.knowledge import ChunkOut, DocumentManualCreate, DocumentOut, DocumentURLCreate
-from app.services import document_pipeline, storage
+from app.services import document_pipeline, file_guard, storage, url_guard
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
@@ -54,7 +55,9 @@ async def list_documents(
 
 
 @router.post("/upload", response_model=DocumentOut)
+@limiter.limit("20/minute")
 async def upload_file(
+    request: Request,
     db: DBSession,
     ctx: Ctx,
     background: BackgroundTasks,
@@ -62,15 +65,22 @@ async def upload_file(
     knowledge_set_id: Annotated[int | None, Form()] = None,
     title: Annotated[str | None, Form()] = None,
 ):
-    data = await file.read()
-    if not data:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Empty file")
-    key = f"t{ctx.tenant_id}/{ctx.industry_code}/{uuid.uuid4()}-{file.filename}"
+    safe_name = file_guard.sanitize_filename(file.filename)
+    try:
+        file_guard.check_filename(safe_name)
+        # Streaming size check: read up to MAX+1 bytes, reject if exceeds
+        from app.core.config import settings as _s
+        data = await file.read(_s.MAX_UPLOAD_BYTES + 1)
+        file_guard.check_bytes(data)
+    except file_guard.UnsafeFileError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+
+    key = f"t{ctx.tenant_id}/{ctx.industry_code}/{uuid.uuid4()}-{safe_name}"
     storage.put_object(key, data, file.content_type or "application/octet-stream")
 
     doc = _new_doc(
         ctx,
-        title=title or file.filename or "untitled",
+        title=title or safe_name,
         source_type="file",
         file_key=key,
         mime_type=file.content_type or "",
@@ -103,6 +113,10 @@ async def create_manual(req: DocumentManualCreate, db: DBSession, ctx: Ctx, back
 
 @router.post("/url", response_model=DocumentOut)
 async def create_url(req: DocumentURLCreate, db: DBSession, ctx: Ctx, background: BackgroundTasks):
+    try:
+        url_guard.assert_safe_url(req.url)
+    except url_guard.UnsafeURLError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unsafe URL: {e}")
     doc = _new_doc(
         ctx,
         title=req.title or req.url,

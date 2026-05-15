@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
 from app.core.deps import CurrentUser, DBSession
+from app.core.limiter import limiter
 from app.core.security import create_access_token, verify_password
 from app.models import Tenant, TenantIndustrySubscription, TenantMember, User
 from app.schemas.auth import LoginRequest, LoginResponse, MeResponse, TenantBrief
@@ -10,7 +11,8 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(req: LoginRequest, db: DBSession):
+@limiter.limit("10/minute")
+async def login(request: Request, req: LoginRequest, db: DBSession):
     user = (await db.execute(select(User).where(User.email == req.email))).scalar_one_or_none()
     if not user or not verify_password(req.password, user.hashed_password):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")

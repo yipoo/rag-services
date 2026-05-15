@@ -11,6 +11,20 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "change-me"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
 
+    # Comma-separated origins, or "*" for dev only.
+    CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
+
+    # Upload limits
+    MAX_UPLOAD_BYTES: int = 50 * 1024 * 1024
+    ALLOWED_UPLOAD_EXTS: str = ".pdf,.docx,.doc,.txt,.md,.markdown,.html,.htm"
+    MAX_CSV_ROWS: int = 5000
+
+    # URL crawl SSRF guard — allow public IPs only
+    URL_CRAWL_ALLOW_PRIVATE: bool = False
+
+    # Startup safety
+    DISABLE_SAFETY_CHECKS: bool = False
+
     DATABASE_URL: str
     REDIS_URL: str = "redis://localhost:6380/0"
 
@@ -44,14 +58,18 @@ class Settings(BaseSettings):
     CACHE_SIM_THRESHOLD: float = 0.95
     CACHE_TTL_SECONDS: int = 86400
 
-    DASHSCOPE_API_KEY: str = "sk-REPLACE-ME"
-    DASHSCOPE_BASE_URL: str = ""  # leave empty to use SDK default; intl: https://dashscope-intl.aliyuncs.com
-    LLM_MODEL: str = "qwen-plus"
+    # LLM. Defaults to local Ollama's OpenAI-compatible endpoint.
+    LLM_BASE_URL: str = "http://localhost:11434/v1"
+    LLM_API_KEY: str = "ollama"
+    LLM_MODEL: str = "deepseek-r1:7b"
     LLM_TEMPERATURE: float = 0.3
     LLM_MAX_TOKENS: int = 800
+    # Legacy DashScope settings are kept so older .env files still load.
+    DASHSCOPE_API_KEY: str = "sk-REPLACE-ME"
+    DASHSCOPE_BASE_URL: str = ""  # leave empty to use SDK default; intl: https://dashscope-intl.aliyuncs.com
     # Qwen3 family enables "thinking mode" by default which adds 10-30s before first token.
     # Disable for low-latency customer service use case.
-    LLM_DISABLE_THINKING: bool = True
+    LLM_DISABLE_THINKING: bool = False
 
     BOOTSTRAP_ADMIN_EMAIL: str = "admin@example.com"
     BOOTSTRAP_ADMIN_PASSWORD: str = "admin123456"

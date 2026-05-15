@@ -1,4 +1,4 @@
-"""LLM gateway. Currently routes to Aliyun DashScope (Qwen)."""
+"""LLM gateway. Defaults to local Ollama via its OpenAI-compatible API."""
 import asyncio
 from functools import lru_cache
 from typing import AsyncIterator
@@ -27,7 +27,7 @@ def build_messages(question: str, contexts: list[str], system_prompt: str | None
 
 async def chat(messages: list[dict], model: str | None = None,
                temperature: float | None = None, max_tokens: int | None = None) -> str:
-    """Sync wrapper over DashScope Generation; runs in a thread."""
+    """Sync wrapper for the configured LLM provider; runs in a thread."""
     return await asyncio.to_thread(
         _chat_sync,
         messages,
@@ -38,9 +38,9 @@ async def chat(messages: list[dict], model: str | None = None,
 
 
 def _chat_sync(messages: list[dict], model: str, temperature: float, max_tokens: int) -> str:
-    """Routes to either DashScope native SDK or OpenAI-compatible endpoint based on config."""
-    base = (settings.DASHSCOPE_BASE_URL or "").strip()
-    if base and "compatible-mode" in base:
+    """Routes to OpenAI-compatible endpoints, or DashScope native if no base URL is set."""
+    base = _llm_base_url()
+    if base:
         return _chat_openai_compat(messages, model, temperature, max_tokens, base)
     return _chat_dashscope_native(messages, model, temperature, max_tokens, base)
 
@@ -73,21 +73,38 @@ def _openai_client(base: str):
     b = base.rstrip("/")
     if b.endswith("/chat/completions"):
         b = b[: -len("/chat/completions")]
-    return OpenAI(api_key=settings.DASHSCOPE_API_KEY, base_url=b)
+    return OpenAI(api_key=_llm_api_key(), base_url=b)
 
 
 def _chat_openai_compat(messages, model, temperature, max_tokens, base):
-    """OpenAI-compatible mode (works for DashScope compatible-mode, DeepSeek, etc.)."""
+    """OpenAI-compatible mode (works for Ollama, DashScope compatible-mode, DeepSeek, etc.)."""
     client = _openai_client(base)
-    extra_body = {}
-    if settings.LLM_DISABLE_THINKING:
-        extra_body["enable_thinking"] = False
+    extra_body = _extra_body(base)
     resp = client.chat.completions.create(
         model=model, messages=messages,
         temperature=temperature, max_tokens=max_tokens,
         extra_body=extra_body or None,
     )
     return resp.choices[0].message.content or ""
+
+
+def _llm_base_url() -> str:
+    return (settings.LLM_BASE_URL or settings.DASHSCOPE_BASE_URL or "").strip()
+
+
+def _llm_api_key() -> str:
+    return (settings.LLM_API_KEY or settings.DASHSCOPE_API_KEY or "ollama").strip()
+
+
+def _extra_body(base: str) -> dict:
+    if settings.LLM_DISABLE_THINKING and _is_dashscope_compatible(base):
+        return {"enable_thinking": False}
+    return {}
+
+
+def _is_dashscope_compatible(base: str) -> bool:
+    normalized = base.lower()
+    return "dashscope" in normalized or "compatible-mode" in normalized
 
 
 # ---------------- streaming ----------------
@@ -99,7 +116,7 @@ async def chat_stream(messages: list[dict], model: str | None = None,
     model = model or settings.LLM_MODEL
     temperature = temperature if temperature is not None else settings.LLM_TEMPERATURE
     max_tokens = max_tokens or settings.LLM_MAX_TOKENS
-    base = (settings.DASHSCOPE_BASE_URL or "").strip()
+    base = _llm_base_url()
 
     queue: asyncio.Queue = asyncio.Queue()
     SENTINEL = object()
@@ -107,11 +124,9 @@ async def chat_stream(messages: list[dict], model: str | None = None,
 
     def _producer():
         try:
-            if base and "compatible-mode" in base:
+            if base:
                 client = _openai_client(base)
-                extra_body = {}
-                if settings.LLM_DISABLE_THINKING:
-                    extra_body["enable_thinking"] = False
+                extra_body = _extra_body(base)
                 stream = client.chat.completions.create(
                     model=model, messages=messages,
                     temperature=temperature, max_tokens=max_tokens, stream=True,

@@ -3,11 +3,17 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 from sqlalchemy import select
+
+from app.core.limiter import limiter
 
 from app.api import admin, auth, chat, chunks, debug, documents, faqs, industries, knowledge_sets, unanswered
 from app.core.config import settings
 from app.core.db import Base, SessionLocal, engine
+from app.core.safety import run_startup_checks
 from app.core.security import hash_password
 from app.models import Industry, Tenant, TenantIndustrySubscription, TenantMember, User
 from app.services import storage, vector_store
@@ -84,16 +90,23 @@ async def _bootstrap() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    run_startup_checks()
     await _bootstrap()
     yield
 
 
 app = FastAPI(title="RAG Services", version="0.1.0", lifespan=lifespan)
 
+# Rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
+_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_origins if _origins != ["*"] else ["*"],
+    allow_credentials=_origins != ["*"],  # credentials are incompatible with wildcard
     allow_methods=["*"],
     allow_headers=["*"],
 )

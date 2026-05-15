@@ -4,7 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Chunk, Document
-from app.services import bm25, chunker, embeddings, parser, storage, vector_store
+from app.services import bm25, chunker, embeddings, parser, storage, url_guard, vector_store
 
 log = structlog.get_logger()
 
@@ -26,9 +26,23 @@ async def process_document(db: AsyncSession, document_id: int) -> None:
             text = parser.parse_bytes(data, doc.mime_type, doc.title)
         elif doc.source_type == "url":
             import httpx
-            r = httpx.get(doc.source_url, timeout=30, follow_redirects=True)
-            r.raise_for_status()
-            text = parser.parse_bytes(r.content, r.headers.get("content-type", ""), doc.source_url)
+            url_guard.assert_safe_url(doc.source_url)
+            # Disable automatic redirects so we can re-check each hop
+            with httpx.Client(timeout=30, follow_redirects=False) as client:
+                cur = doc.source_url
+                for _ in range(5):  # max 5 hops
+                    url_guard.assert_safe_url(cur)
+                    r = client.get(cur)
+                    if r.is_redirect:
+                        cur = str(r.next_request.url) if r.next_request else r.headers.get("location", "")
+                        continue
+                    r.raise_for_status()
+                    break
+                else:
+                    raise ValueError("Too many redirects")
+            # cap body size at 50MB
+            body = r.content[: 50 * 1024 * 1024]
+            text = parser.parse_bytes(body, r.headers.get("content-type", ""), doc.source_url)
         else:
             raise ValueError(f"Unknown source_type: {doc.source_type}")
 

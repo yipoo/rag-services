@@ -8,7 +8,9 @@ from sqlalchemy import select
 from app.core.deps import Ctx, DBSession
 from app.models import FAQ
 from app.schemas.knowledge import FAQCreate, FAQOut
+from app.core.config import settings
 from app.services import faq as faq_svc
+from app.services import file_guard
 
 router = APIRouter(prefix="/api/faqs", tags=["faqs"])
 
@@ -77,16 +79,28 @@ async def delete_faq(faq_id: int, db: DBSession, ctx: Ctx):
 async def import_csv(db: DBSession, ctx: Ctx, file: UploadFile = File(...),
                      knowledge_set_id: int | None = None):
     """CSV columns: question, answer, similar_questions(|-separated, optional)"""
-    raw = (await file.read()).decode("utf-8-sig", errors="ignore")
+    try:
+        # cap file size
+        raw_bytes = await file.read(settings.MAX_UPLOAD_BYTES + 1)
+        file_guard.check_bytes(raw_bytes, label="CSV")
+    except file_guard.UnsafeFileError as e:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+
+    raw = raw_bytes.decode("utf-8-sig", errors="ignore")
     reader = csv.DictReader(io.StringIO(raw))
     created = 0
-    for row in reader:
-        q = (row.get("question") or "").strip()
-        a = (row.get("answer") or "").strip()
+    for i, row in enumerate(reader):
+        if i >= settings.MAX_CSV_ROWS:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"CSV exceeds max rows ({settings.MAX_CSV_ROWS})"
+            )
+        q = (row.get("question") or "").strip()[:2000]
+        a = (row.get("answer") or "").strip()[:5000]
         if not q or not a:
             continue
         sims_raw = (row.get("similar_questions") or "").strip()
-        sims = [s.strip() for s in sims_raw.split("|") if s.strip()] if sims_raw else []
+        sims = [s.strip()[:500] for s in sims_raw.split("|") if s.strip()][:20] if sims_raw else []
         f = FAQ(
             tenant_id=ctx.tenant_id, industry_code=ctx.industry_code,
             scope="PUBLIC" if ctx.tenant_id == 0 else "PRIVATE",
