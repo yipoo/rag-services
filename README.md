@@ -60,6 +60,9 @@ cp .env.example .env
 python3.11 -m venv .venv
 .venv/bin/pip install -e .
 
+# (推荐) 一次性把 embedding/rerank 模型拉到本地缓存，省得后面每次启动等下载
+PYTHONPATH=. .venv/bin/python scripts/preload_models.py
+
 # 启动（首次启动会自动建表 + 创建 admin 用户 + 种子行业 + demo 租户）
 .venv/bin/uvicorn app.main:app --reload --port 8000
 
@@ -110,6 +113,18 @@ npm run dev
 ### 文档处理流水线
 `upload → put MinIO → background task → parse → chunk → embed → upsert Qdrant`
 状态：`pending → parsing → published / failed`，失败会写错误信息。
+
+### 模型缓存
+
+所有本地模型（fastembed embedding、sentence-transformers reranker）统一缓存到：
+
+```
+~/.cache/rag-services/models/
+├── fastembed/              # bge-small-zh-v1.5 (~100MB)
+└── huggingface/            # bge-reranker-v2-m3 (~600MB)
+```
+
+可通过 `MODEL_CACHE_DIR` 环境变量改路径。一次下载、永久复用，**不再受 CWD 影响**。
 
 ### LLM 配置
 `backend/.env` 里：

@@ -39,6 +39,9 @@ class Settings(BaseSettings):
 
     EMBEDDING_MODEL: str = "BAAI/bge-small-zh-v1.5"
     EMBEDDING_DIM: int = 512
+    # Stable cache locations so models download exactly once across runs / CWDs.
+    # Override with env if you want to share between projects.
+    MODEL_CACHE_DIR: str = ""  # empty = auto-derive to ~/.cache/rag-services/models
 
     # Rerank (cross-encoder). Set RERANK_ENABLED=false to skip — the model is ~600MB and lazy-loaded.
     RERANK_ENABLED: bool = True
